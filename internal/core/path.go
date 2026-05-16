@@ -14,6 +14,7 @@ import (
 
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
+	"github.com/bluenviron/mediamtx/internal/delaysource"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
 	"github.com/bluenviron/mediamtx/internal/formatlabel"
 	"github.com/bluenviron/mediamtx/internal/hooks"
@@ -190,6 +191,19 @@ func (pa *path) run() {
 
 	if pa.conf.Source == "redirect" {
 		pa.source = &sourceRedirect{}
+	} else if pa.conf.DelayedFrom != "" {
+		pa.source = &delaysource.Source{
+			ParentCtx:   pa.ctx,
+			PathName:    pa.name,
+			SourcePath:  pa.conf.DelayedFrom,
+			Delay:       time.Duration(pa.conf.DelayedBy),
+			PathManager: pa.parent,
+			Parent:      pa,
+		}
+
+		pa.source.(*delaysource.Source).Initialize()
+		pa.source.(*delaysource.Source).Start()
+
 	} else if pa.conf.HasStaticSource() {
 		pa.source = &staticsources.Handler{
 			Conf:              pa.conf,
@@ -249,9 +263,11 @@ func (pa *path) run() {
 			if !pa.conf.SourceOnDemand || pa.onDemandStaticSourceState != pathOnDemandStateInitial {
 				source.Close("path is closing")
 			}
-		} else if source, ok2 := pa.source.(defs.Publisher); ok2 {
-			source.Close()
 		}
+	} else if source, ok := pa.source.(*delaysource.Source); ok {
+		source.Close()
+	} else if source, ok2 := pa.source.(defs.Publisher); ok2 {
+		source.Close()
 	}
 
 	if pa.onUnDemandHook != nil {
@@ -393,7 +409,9 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 	pa.conf = newConf
 	pa.confMutex.Unlock()
 
-	if pa.conf.HasStaticSource() {
+	if pa.conf.DelayedFrom != "" {
+		// delayed source is intentionally not hot-reloaded; use API delete/add
+	} else if pa.conf.HasStaticSource() {
 		pa.source.(*staticsources.Handler).ReloadConf(newConf)
 	}
 
@@ -517,6 +535,13 @@ func (pa *path) doRemovePublisher(req defs.PathRemovePublisherReq) {
 }
 
 func (pa *path) doAddPublisher(req defs.PathAddPublisherReq) {
+	if pa.conf.DelayedFrom != "" {
+		req.Res <- defs.PathAddPublisherRes{
+			Err: fmt.Errorf("can't publish to path '%s' since it is a delayed path", pa.name),
+		}
+		return
+	}
+
 	if pa.conf.Source != "publisher" {
 		req.Res <- defs.PathAddPublisherRes{
 			Err: fmt.Errorf("can't publish to path '%s' since 'source' is not 'publisher'", pa.name),
