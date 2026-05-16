@@ -46,8 +46,6 @@ var (
 	hubs      = make(map[string]*Hub)
 )
 
-const reconnectPause = 1 * time.Second
-
 func acquireHub(
 	parentCtx context.Context,
 	sourcePath string,
@@ -147,33 +145,14 @@ func (h *Hub) Snapshot() []BufferedUnit {
 func (h *Hub) run() {
 	defer close(h.done)
 
-	for {
-		err := h.runInner()
+	err := h.runInner()
 
-		if h.ctx.Err() != nil {
-			h.mutex.Lock()
-			if h.desc == nil && h.readyErr == nil {
-				h.readyErr = fmt.Errorf("terminated")
-				close(h.ready)
-			}
-			h.mutex.Unlock()
-			return
-		}
-
-		h.Log(logger.Warn, "%v, retrying in %v", err, reconnectPause)
-
-		select {
-		case <-time.After(reconnectPause):
-		case <-h.ctx.Done():
-			h.mutex.Lock()
-			if h.desc == nil && h.readyErr == nil {
-				h.readyErr = fmt.Errorf("terminated")
-				close(h.ready)
-			}
-			h.mutex.Unlock()
-			return
-		}
+	h.mutex.Lock()
+	if h.desc == nil && h.readyErr == nil {
+		h.readyErr = err
+		close(h.ready)
 	}
+	h.mutex.Unlock()
 }
 
 func (h *Hub) runInner() error {
@@ -192,12 +171,13 @@ func (h *Hub) runInner() error {
 		return res.Err
 	}
 
+	h.sourceRes = res
 	sourceStream := res.Stream
 	if sourceStream == nil {
 		return fmt.Errorf("source path '%s' has no stream", h.sourcePath)
 	}
 
-	reader := &stream.Reader{
+	h.reader = &stream.Reader{
 		SkipOutboundBytes: true,
 		Parent:            h,
 	}
@@ -207,7 +187,7 @@ func (h *Hub) runInner() error {
 			medi := medi
 			forma := forma
 
-			reader.OnData(medi, forma, func(u *unit.Unit) error {
+			h.reader.OnData(medi, forma, func(u *unit.Unit) error {
 				h.push(BufferedUnit{
 					ReceivedAt: time.Now(),
 					Media:      medi,
@@ -220,39 +200,25 @@ func (h *Hub) runInner() error {
 		}
 	}
 
-	sourceStream.AddReader(reader)
+	sourceStream.AddReader(h.reader)
 
 	h.mutex.Lock()
-	h.reader = reader
-	h.sourceRes = res
-
-	if h.desc == nil {
-		h.desc = sourceStream.Desc
-		close(h.ready)
-	}
+	h.desc = sourceStream.Desc
+	close(h.ready)
 	h.mutex.Unlock()
 
 	defer func() {
-		sourceStream.RemoveReader(reader)
+		sourceStream.RemoveReader(h.reader)
 
-		if res.Path != nil {
-			res.Path.RemoveReader(defs.PathRemoveReaderReq{
+		if h.sourceRes != nil && h.sourceRes.Path != nil {
+			h.sourceRes.Path.RemoveReader(defs.PathRemoveReaderReq{
 				Author: h,
 			})
 		}
-
-		h.mutex.Lock()
-		if h.reader == reader {
-			h.reader = nil
-		}
-		if h.sourceRes == res {
-			h.sourceRes = nil
-		}
-		h.mutex.Unlock()
 	}()
 
 	select {
-	case err := <-reader.Error():
+	case err := <-h.reader.Error():
 		return err
 
 	case <-h.ctx.Done():

@@ -68,20 +68,9 @@ func (s *Source) APISourceDescribe() *defs.APIPathSource {
 func (s *Source) run() {
 	defer close(s.done)
 
-	for {
-		err := s.runInner()
-
-		if s.ctx.Err() != nil {
-			break
-		}
-
-		s.Log(logger.Warn, "%v, retrying in 1s", err)
-
-		select {
-		case <-time.After(1 * time.Second):
-		case <-s.ctx.Done():
-			break
-		}
+	err := s.runInner()
+	if err != nil && s.ctx.Err() == nil {
+		s.Log(logger.Error, "%v", err)
 	}
 
 	if s.subStream != nil {
@@ -92,25 +81,21 @@ func (s *Source) run() {
 		})
 
 		<-res
-		s.subStream = nil
 	}
 
 	if s.hub != nil {
 		releaseHub(s.hub)
-		s.hub = nil
 	}
 }
 
 func (s *Source) runInner() error {
-	if s.hub == nil {
-		s.hub = acquireHub(
-			s.ParentCtx,
-			s.SourcePath,
-			s.Delay,
-			s.PathManager,
-			s.Parent,
-		)
-	}
+	s.hub = acquireHub(
+		s.ParentCtx,
+		s.SourcePath,
+		s.Delay,
+		s.PathManager,
+		s.Parent,
+	)
 
 	desc, err := s.hub.WaitReady(s.ctx)
 	if err != nil {
@@ -129,19 +114,10 @@ func (s *Source) setReady(desc *description.Session) error {
 	res := make(chan defs.PathSourceStaticSetReadyRes)
 
 	s.Parent.StaticSourceHandlerSetReady(s.ctx, defs.PathSourceStaticSetReadyReq{
-		Desc: desc,
-
-		// ВАЖНО:
-		// delayed-source читает данные уже из существующего Stream,
-		// поэтому публиковать их обратно лучше как codec payload,
-		// а не как "сырой" RTP publisher.
-		UseRTPPackets: false,
-
-		// Для WebRTC лучше позволить MediaMTX заменить NTP на новый,
-		// соответствующий моменту delayed-публикации.
-		ReplaceNTP: true,
-
-		Res: res,
+		Desc:          desc,
+		UseRTPPackets: true,
+		ReplaceNTP:    false,
+		Res:           res,
 	})
 
 	select {
@@ -173,15 +149,11 @@ func (s *Source) writerLoop() error {
 
 			for i := range ready {
 				item := ready[i]
-				if item.Unit == nil || item.Unit.NilPayload() {
+				if item.Unit == nil {
 					continue
 				}
 
-				// Пишем копию, потому что WriteUnit может модифицировать Unit:
-				// менять NTP, очищать RTPPackets, обновлять Payload после remux.
-				u := cloneUnit(item.Unit)
-
-				s.subStream.WriteUnit(item.Media, item.Format, u)
+				s.subStream.WriteUnit(item.Media, item.Format, item.Unit)
 			}
 
 		case <-s.ctx.Done():

@@ -182,8 +182,15 @@ type Path struct {
 	Name   string         `json:"name"` // filled by Validate()
 
 	// General
-	Source                     string   `json:"source"`
-	SourceFingerprint          string   `json:"sourceFingerprint"`
+	Source            string `json:"source"`
+	SourceFingerprint string `json:"sourceFingerprint"`
+
+	// Delayed virtual source.
+	// If DelayedFrom is set, this path becomes a virtual delayed copy
+	// of another path and cannot accept direct publishers.
+	DelayedFrom string   `json:"delayedFrom"`
+	DelayedBy   Duration `json:"delayedBy"`
+
 	SourceOnDemand             bool     `json:"sourceOnDemand"`
 	SourceOnDemandStartTimeout Duration `json:"sourceOnDemandStartTimeout"`
 	SourceOnDemandCloseAfter   Duration `json:"sourceOnDemandCloseAfter"`
@@ -416,6 +423,24 @@ func (pconf *Path) validate(
 
 	if pconf.Source != "redirect" && pconf.SourceRedirect != "" {
 		return fmt.Errorf("'sourceRedirect' is useless when source is not 'redirect'")
+	}
+
+	if pconf.DelayedFrom != "" {
+		if pconf.Source != "publisher" {
+			return fmt.Errorf("'delayedFrom' can be used only when source is 'publisher'")
+		}
+
+		if pconf.DelayedBy <= 0 {
+			return fmt.Errorf("'delayedBy' must be greater than zero")
+		}
+
+		if pconf.DelayedFrom == name {
+			return fmt.Errorf("'delayedFrom' cannot reference the same path")
+		}
+
+		if pconf.SourceOnDemand {
+			return fmt.Errorf("'sourceOnDemand' cannot be used together with 'delayedFrom'")
+		}
 	}
 
 	// General
