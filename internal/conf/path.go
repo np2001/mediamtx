@@ -185,11 +185,11 @@ type Path struct {
 	Source            string `json:"source"`
 	SourceFingerprint string `json:"sourceFingerprint"`
 
-	// Delayed virtual source.
-	// If DelayedFrom is set, this path becomes a virtual delayed copy
+	// Prealarm virtual source.
+	// If PrealarmFrom is set, this path becomes a virtual pre-alarm copy
 	// of another path and cannot accept direct publishers.
-	DelayedFrom string   `json:"delayedFrom"`
-	DelayedBy   Duration `json:"delayedBy"`
+	PreAlarmFrom     string   `json:"preAlarmFrom"`
+	PreAlarmDuration Duration `json:"preAlarmDuration"`
 
 	SourceOnDemand             bool     `json:"sourceOnDemand"`
 	SourceOnDemandStartTimeout Duration `json:"sourceOnDemandStartTimeout"`
@@ -425,21 +425,21 @@ func (pconf *Path) validate(
 		return fmt.Errorf("'sourceRedirect' is useless when source is not 'redirect'")
 	}
 
-	if pconf.DelayedFrom != "" {
+	if pconf.PreAlarmFrom != "" {
 		if pconf.Source != "publisher" {
-			return fmt.Errorf("'delayedFrom' can be used only when source is 'publisher'")
+			return fmt.Errorf("'preAlarmFrom' can be used only when source is 'publisher'")
 		}
 
-		if pconf.DelayedBy <= 0 {
-			return fmt.Errorf("'delayedBy' must be greater than zero")
+		if pconf.PreAlarmDuration <= 0 {
+			return fmt.Errorf("'preAlarmDuration' must be greater than zero")
 		}
 
-		if pconf.DelayedFrom == name {
-			return fmt.Errorf("'delayedFrom' cannot reference the same path")
+		if pconf.PreAlarmFrom == name {
+			return fmt.Errorf("'preAlarmFrom' cannot reference the same path")
 		}
 
 		if pconf.SourceOnDemand {
-			return fmt.Errorf("'sourceOnDemand' cannot be used together with 'delayedFrom'")
+			return fmt.Errorf("'sourceOnDemand' cannot be used together with 'preAlarmFrom'")
 		}
 	}
 

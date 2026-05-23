@@ -1,4 +1,4 @@
-package delaysource
+package prealarmsource
 
 import (
 	"context"
@@ -35,9 +35,21 @@ type Source struct {
 	subStream *stream.SubStream
 }
 
+func (s *Source) APISourceDescribe() *defs.APIPathSource {
+	return &defs.APIPathSource{
+		Type: defs.APIPathSourceTypePreAlarmSource,
+		ID:   s.SourcePath,
+	}
+}
+
+func (s *Source) Log(level logger.Level, format string, args ...any) {
+	s.Parent.Log(level, "[prealarm source "+s.PathName+" <- "+s.SourcePath+"] "+format, args...)
+}
+
 func (s *Source) Initialize() {
 	s.ctx, s.ctxCancel = context.WithCancel(s.ParentCtx)
 	s.done = make(chan struct{})
+	s.Parent.Log(logger.Info, "Initialize prealarm source "+s.PathName+" <- "+s.SourcePath)
 }
 
 func (s *Source) Start() {
@@ -54,23 +66,11 @@ func (s *Source) Close() {
 	}
 }
 
-func (s *Source) Log(level logger.Level, format string, args ...any) {
-	s.Parent.Log(level, "[delay source "+s.PathName+" <- "+s.SourcePath+"] "+format, args...)
-}
-
-func (s *Source) APISourceDescribe() *defs.APIPathSource {
-	return &defs.APIPathSource{
-		Type: defs.APIPathSourceTypeDelaySource,
-		ID:   s.SourcePath,
-	}
-}
-
 func (s *Source) run() {
 	defer close(s.done)
 
 	for {
 		err := s.runInner()
-
 		if s.ctx.Err() != nil {
 			break
 		}
@@ -125,6 +125,39 @@ func (s *Source) runInner() error {
 	return s.writerLoop()
 }
 
+func (s *Source) writerLoop() error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	cursor := &Cursor{}
+
+	for {
+		select {
+		case <-ticker.C:
+			target := time.Now().Add(-s.Delay)
+			items := s.hub.Snapshot()
+			ready := cursor.ReadyItems(items, target)
+
+			for i := range ready {
+				item := ready[i]
+				if item.Unit == nil || item.Unit.NilPayload() {
+					continue
+				}
+
+				// Пишем копию, потому что WriteUnit может модифицировать Unit:
+				// менять NTP, очищать RTPPackets, обновлять Payload после remux.
+
+				u := cloneUnit(item.Unit)
+
+				s.subStream.WriteUnit(item.Media, item.Format, u)
+			}
+
+		case <-s.ctx.Done():
+			return fmt.Errorf("terminated")
+		}
+	}
+}
+
 func (s *Source) setReady(desc *description.Session) error {
 	res := make(chan defs.PathSourceStaticSetReadyRes)
 
@@ -155,37 +188,5 @@ func (s *Source) setReady(desc *description.Session) error {
 
 	case <-s.ctx.Done():
 		return fmt.Errorf("terminated")
-	}
-}
-
-func (s *Source) writerLoop() error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	cursor := &Cursor{}
-
-	for {
-		select {
-		case <-ticker.C:
-			target := time.Now().Add(-s.Delay)
-			items := s.hub.Snapshot()
-			ready := cursor.ReadyItems(items, target)
-
-			for i := range ready {
-				item := ready[i]
-				if item.Unit == nil || item.Unit.NilPayload() {
-					continue
-				}
-
-				// Пишем копию, потому что WriteUnit может модифицировать Unit:
-				// менять NTP, очищать RTPPackets, обновлять Payload после remux.
-				u := cloneUnit(item.Unit)
-
-				s.subStream.WriteUnit(item.Media, item.Format, u)
-			}
-
-		case <-s.ctx.Done():
-			return fmt.Errorf("terminated")
-		}
 	}
 }

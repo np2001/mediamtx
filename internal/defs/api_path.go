@@ -16,6 +16,7 @@ type APIPathSourceType string
 // source types.
 const (
 	APIPathSourceTypeDelaySource     APIPathSourceType = "delaySource"
+	APIPathSourceTypePreAlarmSource  APIPathSourceType = "preAlarmSource"
 	APIPathSourceTypeHLSSource       APIPathSourceType = "hlsSource"
 	APIPathSourceTypeRedirect        APIPathSourceType = "redirect"
 	APIPathSourceTypeRPICameraSource APIPathSourceType = "rpiCameraSource"

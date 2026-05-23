@@ -3,5 +3,5 @@ paths:
     source: publisher
 
   cam_delay_5:
-    delayedFrom: cam
-    delayedBy: 5s
+    preAlarmFrom: cam
+    preAlarmDuration: 5s

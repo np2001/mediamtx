@@ -1,4 +1,4 @@
-package delaysource
+package prealarmsource
 
 import (
 	"time"

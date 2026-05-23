@@ -14,11 +14,11 @@ import (
 
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
-	"github.com/bluenviron/mediamtx/internal/delaysource"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
 	"github.com/bluenviron/mediamtx/internal/formatlabel"
 	"github.com/bluenviron/mediamtx/internal/hooks"
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/prealarmsource"
 	"github.com/bluenviron/mediamtx/internal/recorder"
 	"github.com/bluenviron/mediamtx/internal/staticsources"
 	"github.com/bluenviron/mediamtx/internal/stream"
@@ -191,18 +191,18 @@ func (pa *path) run() {
 
 	if pa.conf.Source == "redirect" {
 		pa.source = &sourceRedirect{}
-	} else if pa.conf.DelayedFrom != "" {
-		pa.source = &delaysource.Source{
+	} else if pa.conf.PreAlarmFrom != "" {
+		pa.source = &prealarmsource.Source{
 			ParentCtx:   pa.ctx,
 			PathName:    pa.name,
-			SourcePath:  pa.conf.DelayedFrom,
-			Delay:       time.Duration(pa.conf.DelayedBy),
+			SourcePath:  pa.conf.PreAlarmFrom,
+			Delay:       time.Duration(pa.conf.PreAlarmDuration),
 			PathManager: pa.parent,
 			Parent:      pa,
 		}
 
-		pa.source.(*delaysource.Source).Initialize()
-		pa.source.(*delaysource.Source).Start()
+		pa.source.(*prealarmsource.Source).Initialize()
+		pa.source.(*prealarmsource.Source).Start()
 
 	} else if pa.conf.HasStaticSource() {
 		pa.source = &staticsources.Handler{
@@ -264,7 +264,7 @@ func (pa *path) run() {
 				source.Close("path is closing")
 			}
 		}
-	} else if source, ok := pa.source.(*delaysource.Source); ok {
+	} else if source, ok := pa.source.(*prealarmsource.Source); ok {
 		source.Close()
 	} else if source, ok2 := pa.source.(defs.Publisher); ok2 {
 		source.Close()
@@ -409,7 +409,7 @@ func (pa *path) doReloadConf(newConf *conf.Path) {
 	pa.conf = newConf
 	pa.confMutex.Unlock()
 
-	if pa.conf.DelayedFrom != "" {
+	if pa.conf.PreAlarmFrom != "" {
 		// delayed source is intentionally not hot-reloaded; use API delete/add
 	} else if pa.conf.HasStaticSource() {
 		pa.source.(*staticsources.Handler).ReloadConf(newConf)
@@ -535,9 +535,9 @@ func (pa *path) doRemovePublisher(req defs.PathRemovePublisherReq) {
 }
 
 func (pa *path) doAddPublisher(req defs.PathAddPublisherReq) {
-	if pa.conf.DelayedFrom != "" {
+	if pa.conf.PreAlarmFrom != "" {
 		req.Res <- defs.PathAddPublisherRes{
-			Err: fmt.Errorf("can't publish to path '%s' since it is a delayed path", pa.name),
+			Err: fmt.Errorf("can't publish to path '%s' since it is a prealarm path", pa.name),
 		}
 		return
 	}

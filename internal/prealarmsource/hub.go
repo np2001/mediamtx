@@ -1,4 +1,4 @@
-package delaysource
+package prealarmsource
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
-
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/logger"
 	"github.com/bluenviron/mediamtx/internal/stream"
@@ -18,35 +17,34 @@ type PathManager interface {
 	AddReader(req defs.PathAddReaderReq) (*defs.PathAddReaderRes, error)
 }
 
-type Hub struct {
-	sourcePath string
+const reconnectPause = 1 * time.Second
 
+type Hub struct {
+	sourcePath  string
+	refCount    int
+	ctxCancel   context.CancelFunc
+	done        chan struct{}
 	parentCtx   context.Context
 	ctx         context.Context
-	ctxCancel   context.CancelFunc
 	pathManager PathManager
 	parent      logger.Writer
-
-	mutex    sync.RWMutex
-	refCount int
-	maxDelay time.Duration
-	nextSeq  uint64
-	items    []BufferedUnit
-	desc     *description.Session
-	readyErr error
-	ready    chan struct{}
-	done     chan struct{}
+	maxDelay    time.Duration
+	ready       chan struct{}
+	mutex       sync.RWMutex
+	desc        *description.Session
+	readyErr    error
 
 	reader    *stream.Reader
 	sourceRes *defs.PathAddReaderRes
+
+	nextSeq uint64
+	items   []BufferedUnit
 }
 
 var (
 	hubsMutex sync.Mutex
 	hubs      = make(map[string]*Hub)
 )
-
-const reconnectPause = 1 * time.Second
 
 func acquireHub(
 	parentCtx context.Context,
@@ -59,6 +57,7 @@ func acquireHub(
 	defer hubsMutex.Unlock()
 
 	h, ok := hubs[sourcePath]
+
 	if !ok {
 		ctx, ctxCancel := context.WithCancel(parentCtx)
 
@@ -103,14 +102,6 @@ func releaseHub(h *Hub) {
 	<-h.done
 }
 
-func (h *Hub) Log(level logger.Level, format string, args ...any) {
-	h.parent.Log(level, "[delay hub "+h.sourcePath+"] "+format, args...)
-}
-
-func (h *Hub) Close() {
-	h.ctxCancel()
-}
-
 func (h *Hub) APIReaderDescribe() *defs.APIPathReader {
 	return &defs.APIPathReader{
 		Type: defs.APIPathReaderTypeHidden,
@@ -118,30 +109,8 @@ func (h *Hub) APIReaderDescribe() *defs.APIPathReader {
 	}
 }
 
-func (h *Hub) WaitReady(ctx context.Context) (*description.Session, error) {
-	select {
-	case <-h.ready:
-		h.mutex.RLock()
-		defer h.mutex.RUnlock()
-
-		if h.readyErr != nil {
-			return nil, h.readyErr
-		}
-
-		return h.desc, nil
-
-	case <-ctx.Done():
-		return nil, fmt.Errorf("terminated")
-	}
-}
-
-func (h *Hub) Snapshot() []BufferedUnit {
-	h.mutex.RLock()
-	defer h.mutex.RUnlock()
-
-	out := make([]BufferedUnit, len(h.items))
-	copy(out, h.items)
-	return out
+func (h *Hub) Close() {
+	h.ctxCancel()
 }
 
 func (h *Hub) run() {
@@ -149,7 +118,6 @@ func (h *Hub) run() {
 
 	for {
 		err := h.runInner()
-
 		if h.ctx.Err() != nil {
 			h.mutex.Lock()
 			if h.desc == nil && h.readyErr == nil {
@@ -174,6 +142,10 @@ func (h *Hub) run() {
 			return
 		}
 	}
+}
+
+func (h *Hub) Log(level logger.Level, format string, args ...any) {
+	h.parent.Log(level, "[delay hub "+h.sourcePath+"] "+format, args...)
 }
 
 func (h *Hub) runInner() error {
@@ -258,6 +230,32 @@ func (h *Hub) runInner() error {
 	case <-h.ctx.Done():
 		return fmt.Errorf("terminated")
 	}
+}
+
+func (h *Hub) WaitReady(ctx context.Context) (*description.Session, error) {
+	select {
+	case <-h.ready:
+		h.mutex.RLock()
+		defer h.mutex.RUnlock()
+
+		if h.readyErr != nil {
+			return nil, h.readyErr
+		}
+
+		return h.desc, nil
+
+	case <-ctx.Done():
+		return nil, fmt.Errorf("terminated")
+	}
+}
+
+func (h *Hub) Snapshot() []BufferedUnit {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+
+	out := make([]BufferedUnit, len(h.items))
+	copy(out, h.items)
+	return out
 }
 
 func (h *Hub) push(item BufferedUnit) {
